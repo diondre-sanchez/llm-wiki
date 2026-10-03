@@ -1,0 +1,37 @@
+# llm-wiki configuration. Override the provider per command with: wiki --provider anthropic ...
+
+[llm]
+provider = "ollama"            # "ollama" (local) | "anthropic" (Claude API)
+
+[ollama]
+host = "http://localhost:11434"
+model = "qwen3.8:27b"          # alternatives you have: phi4:14b (faster), qwen3-coder:30b
+num_ctx = 16384                # raise if VRAM allows; ingest chunking keeps prompts under this
+temperature = 0.2
+think = false                  # true = let thinking models reason first (slower, sometimes better)
+timeout = 900                  # seconds per request
+
+[anthropic]
+# Needs: uv sync --extra claude, plus ANTHROPIC_API_KEY (or `ant auth login`)
+model = "claude-opus-5-5"
+effort = "medium"              # low | medium | high | xhigh | max
+max_tokens = 32000
+
+[embeddings]
+# Always local, regardless of [llm].provider. Claude has no embeddings endpoint.
+host = "http://localhost:11434"
+model = "nomic-embed-text"
+
+[paths]
+vault = "vault"                # open this folder in Obsidian
+schema = "AGENTS.md"           # conventions file, used as the system prompt
+cache = ".cache"
+
+[ingest]
+max_source_chars = 24000       # longer sources are condensed chunk-by-chunk first
+chunk_chars = 12000
+related_pages = 8              # existing pages shown to the planner for each ingest
+max_pages_per_ingest = 12
+
+[query]
+top_k = 6
