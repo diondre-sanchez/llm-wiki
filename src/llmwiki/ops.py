@@ -8,29 +8,42 @@ from pathlib import Path
 from .config import Config
 from .providers import LLM
 from .search import SearchIndex
-from .vault import Page, Vault
+from .vault import Page, Vault, clean_title
 
-PLAN_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "source_title": {"type": "string"},
-        "pages": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string"},
-                    "type": {"type": "string", "enum": ["entity", "concept"]},
-                    "why": {"type": "string"},
+def plan_schema(existing_titles: list[str]) -> dict:
+    """Updates may only name existing pages (enforced by an enum), so the model can't misspell them."""
+    update_title = {"type": "string", "enum": existing_titles} if existing_titles else {"type": "string"}
+    return {
+        "type": "object",
+        "properties": {
+            "source_title": {"type": "string"},
+            "updates": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"title": update_title, "why": {"type": "string"}},
+                    "required": ["title", "why"],
+                    "additionalProperties": False,
                 },
-                "required": ["title", "type", "why"],
-                "additionalProperties": False,
+            },
+            "new_pages": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"},
+                        "type": {"type": "string", "enum": ["entity", "concept"]},
+                        "why": {"type": "string"},
+                    },
+                    "required": ["title", "type", "why"],
+                    "additionalProperties": False,
+                },
             },
         },
-    },
-    "required": ["source_title", "pages"],
-    "additionalProperties": False,
-}
+        "required": ["source_title", "updates", "new_pages"],
+        "additionalProperties": False,
+    }
+
 
 PAGE_SCHEMA = {
     "type": "object",
@@ -133,22 +146,36 @@ class Wiki:
 
         self.echo("  planning pages...")
         max_pages = self.cfg.get("ingest", "max_pages_per_ingest", 12)
+        # Analyses are snapshots of past answers, and sources belong to one raw file; neither is merged into.
+        related_titles = [p.title for p, _ in related if p.type in {"entity", "concept"}]
         plan = _json(self.llm.complete(self.system, f"""TASK: plan an ingest.
 
-Read the SOURCE and decide which wiki pages should be created or updated.
-- Pick the {max_pages} or fewer most important entities (people, orgs, products, places, works) and concepts (ideas, methods, terms).
-- Prefer updating an EXISTING page over creating a near-duplicate; reuse its exact title.
-- Skip trivia that would not deserve its own page.
+Read the SOURCE and decide which wiki pages it should change. Knowledge must compound, so:
+- updates: EXISTING PAGES that this source adds new facts, examples, or counterpoints to.
+  Include every existing page the source says something substantive about.
+- new_pages: important entities (people, orgs, products, places, works) and concepts (ideas, methods, terms)
+  that have no page yet. Only subjects a reader would look up on their own; skip tools, files,
+  and names mentioned only in passing. Never duplicate an existing page under a new name.
+- At most {max_pages} pages in total across both lists.
 - source_title: a short descriptive title for the source itself.
 
-EXISTING RELATED PAGES:
+EXISTING PAGES:
 {related_txt}
 
 SOURCE ({source_id}):
-{material}""", PLAN_SCHEMA))
+{material}""", plan_schema(related_titles)))
 
-        planned = plan["pages"][:max_pages]
-        source_title = plan["source_title"].strip() or src.stem
+        updates = list({u["title"].lower(): u for u in plan["updates"]
+                        if u["title"] in related_titles}.values())
+        new_pages = []
+        for item in plan["new_pages"]:
+            item["title"] = clean_title(item["title"])
+            if item["title"] and not self.vault.find(item["title"]):
+                new_pages.append(item)
+        planned = [{"title": u["title"], "type": self.vault.find(u["title"]).type, "why": u["why"]} for u in updates]
+        planned = (planned + new_pages)[:max_pages]
+
+        source_title = clean_title(plan["source_title"]) or clean_title(src.stem)
         # A source often shares its name with its main subject; keep the two pages distinct.
         clash = self.vault.find(source_title)
         if any(x["title"].lower() == source_title.lower() for x in planned) or (clash and clash.type != "source"):

@@ -32,7 +32,10 @@ class Page:
 
     @property
     def links(self) -> set[str]:
-        return {m.strip() for m in WIKILINK.findall(self.body)}
+        # Like Obsidian, ignore [[...]] inside fenced code blocks and inline code.
+        text = re.sub(r"```.*?```", "", self.body, flags=re.S)
+        text = re.sub(r"`[^`\n]*`", "", text)
+        return {m.strip() for m in WIKILINK.findall(text)}
 
     def text(self) -> str:
         return f"# {self.title}\n\n{self.body}"
@@ -106,6 +109,13 @@ def render_page(page: Page) -> str:
 
 
 # --- vault operations ---
+
+def clean_title(title: str) -> str:
+    """Make a title usable as both an Obsidian link target and a Windows filename."""
+    t = title.replace(": ", " - ").replace(":", "-").replace("/", "-").replace("\\", "-")
+    t = re.sub(r'[*?"<>|#^\[\]]', "", t)
+    return re.sub(r"\s+", " ", t).strip().rstrip(".")[:120]
+
 
 def safe_filename(title: str) -> str:
     name = re.sub(r'[\\/:*?"<>|#^\[\]]', "", title).strip().rstrip(".")
