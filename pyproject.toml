@@ -12,6 +12,9 @@ claude = ["anthropic>=0.70"]
 convert = [
     "markitdown[docx,outlook,pdf,pptx,xls,xlsx]>=0.1.8",
 ]
+mcp = [
+    "mcp>=1.20",
+]
 
 [project.scripts]
 wiki = "llmwiki.cli:main"

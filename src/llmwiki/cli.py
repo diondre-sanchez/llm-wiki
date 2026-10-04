@@ -57,6 +57,10 @@ def main(argv: list[str] | None = None) -> None:
 
     sub.add_parser("reindex", help="rebuild index.md and refresh embeddings")
 
+    p = sub.add_parser("mcp", help="serve the wiki to MCP clients (Open WebUI, Claude Desktop, ...) over HTTP")
+    p.add_argument("--host", help="bind address (default [mcp].host, 127.0.0.1)")
+    p.add_argument("--port", type=int, help="port (default [mcp].port, 8765)")
+
     args = ap.parse_args(argv)
     cfg = load_config()
 
@@ -91,6 +95,12 @@ def main(argv: list[str] | None = None) -> None:
         vault.rebuild_index()
         n = SearchIndex(cfg, vault).refresh()
         print(f"index.md rebuilt; {n} page(s) re-embedded.")
+        return
+
+    if args.cmd == "mcp":
+        from .mcp_server import serve
+
+        serve(cfg, host=args.host, port=args.port)
         return
 
     from .ops import Wiki

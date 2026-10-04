@@ -35,3 +35,10 @@ max_pages_per_ingest = 12
 
 [query]
 top_k = 6
+
+[mcp]
+# `uv run wiki mcp` serves the wiki to MCP clients. Needs: uv sync --extra mcp
+host = "127.0.0.1"             # keep on loopback when the client (e.g. Open WebUI) runs on this machine
+port = 8765
+token = ""                     # optional bearer token; required if host is not loopback
+enable_query = false           # also expose wiki_query, which runs llm-wiki's own engine (slow, uses the GPU)

@@ -51,6 +51,7 @@ uv run wiki lint
 | `search "<text>"` | Hybrid search only, no LLM call. |
 | `lint [--no-llm]` | Broken links, orphans, missing summaries, uncited pages; with the LLM also duplicates, contradictions and suggested pages. Writes `wiki/lint-report.md`. |
 | `reindex` | Rebuilds `index.md` and refreshes embeddings after you edit pages by hand. |
+| `mcp [--host H] [--port P]` | Serves the wiki to MCP clients such as Open WebUI, Claude Desktop and Cursor. Needs `--extra mcp`. See [docs/open-webui.md](docs/open-webui.md). |
 | `init` | Creates the vault folders. |
 
 ## Source formats
@@ -67,6 +68,13 @@ memory at ingest time, and files in `raw/` are never modified.
 
 Folder ingest skips unsupported files and lists them. A file that can't be read (wrong type, corrupt,
 no text) is reported and left out of `raw/`; the rest of the batch continues and the command exits 1.
+
+## Open WebUI and other MCP clients
+
+`uv run wiki mcp` starts a read-only MCP server on `http://127.0.0.1:8765/mcp` with `wiki_search`,
+`wiki_read` and `wiki_index` tools. Register it in Open WebUI as an external tool server and the
+model you chat with can search and cite your wiki. Setup steps, security notes and a Windows
+start-at-logon script: [docs/open-webui.md](docs/open-webui.md).
 
 ## Switching to Claude
 
@@ -92,7 +100,9 @@ You can also point Claude Code (or Codex) at this folder and let it edit the vau
 ```
 AGENTS.md          schema: conventions the LLM follows (also the system prompt)
 wiki.toml          provider, models, limits
-src/llmwiki/       providers.py, sources.py, vault.py, search.py, ops.py, cli.py
+src/llmwiki/       providers.py, sources.py, vault.py, search.py, ops.py, mcp_server.py, cli.py
+scripts/           start-mcp.ps1, install-startup-task.ps1
+docs/              open-webui.md
 vault/raw/         immutable sources
 vault/wiki/        sources/ entities/ concepts/ analyses/ index.md log.md
 .cache/            embedding cache (safe to delete)
