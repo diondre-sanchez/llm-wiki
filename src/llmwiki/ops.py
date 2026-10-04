@@ -8,6 +8,7 @@ from pathlib import Path
 from .config import Config
 from .providers import LLM
 from .search import SearchIndex
+from .sources import read_source
 from .vault import Page, Vault, clean_title
 
 def plan_schema(existing_titles: list[str]) -> dict:
@@ -96,22 +97,6 @@ def _json(text: str) -> dict:
     return json.loads(text)
 
 
-def read_source(path: Path) -> str:
-    suffix = path.suffix.lower()
-    if suffix == ".pdf":
-        try:
-            from pypdf import PdfReader
-        except ImportError as e:
-            raise SystemExit("PDF ingest needs: uv sync --extra pdf") from e
-        return "\n\n".join(page.extract_text() or "" for page in PdfReader(str(path)).pages)
-    text = path.read_text(encoding="utf-8", errors="replace")
-    if suffix in {".html", ".htm"}:
-        text = re.sub(r"(?is)<(script|style).*?</\1>", "", text)
-        text = re.sub(r"<[^>]+>", " ", text)
-        text = re.sub(r"[ \t]+", " ", text)
-    return text
-
-
 class Wiki:
     def __init__(self, cfg: Config, llm: LLM, echo=print):
         self.cfg = cfg
@@ -126,6 +111,7 @@ class Wiki:
 
     def ingest(self, src: Path) -> list[str]:
         src = src.resolve()
+        text = read_source(src)  # before copying, so unreadable files never land in raw/
         raw = self.vault.raw.resolve()
         if raw not in src.parents:
             dest = raw / src.name
@@ -135,9 +121,6 @@ class Wiki:
             src = dest
         source_id = src.relative_to(raw).as_posix()
 
-        text = read_source(src).strip()
-        if not text:
-            raise SystemExit(f"No text could be read from {src}")
         material = self._condense(text)
 
         self.index.refresh()

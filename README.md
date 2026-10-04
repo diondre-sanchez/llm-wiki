@@ -8,13 +8,17 @@ instead of over raw chunks.
 - **Engine:** local Ollama by default; switch to Claude by changing one setting.
 - **Search:** BM25 + local embeddings (`nomic-embed-text`), fused with reciprocal rank fusion. Always local.
 - **Storage:** plain markdown with YAML frontmatter and `[[wikilinks]]`. Open `vault/` in Obsidian.
-- **Core dependencies:** none (Python stdlib). PDF and Claude support are optional extras.
+- **Core dependencies:** none (Python stdlib). Document conversion, PDF and Claude support are optional extras.
 
 ## Setup
 
 ```bash
-uv sync --extra pdf
+uv sync --extra convert
 ```
+
+`convert` installs [MarkItDown](https://github.com/microsoft/markitdown) for Word, PowerPoint, Excel,
+EPUB and Outlook files, and better PDF and HTML extraction. For a minimal install, `--extra pdf` alone
+handles markdown, text, PDF and HTML.
 
 ```bash
 uv run wiki status
@@ -42,17 +46,32 @@ uv run wiki lint
 
 | Command | What it does |
 |---|---|
-| `ingest <files or folders>` | Copies the source into `vault/raw/`, writes a source summary page, and creates or updates entity and concept pages. Supports md, txt, pdf and html. |
+| `ingest <files or folders>` | Copies the source into `vault/raw/`, writes a source summary page, and creates or updates entity and concept pages. See [Source formats](#source-formats). |
 | `query "<question>" [--save] [-k N]` | Retrieves the top pages and answers with `[[citations]]`. `--save` files the answer back as an analysis page. |
 | `search "<text>"` | Hybrid search only, no LLM call. |
 | `lint [--no-llm]` | Broken links, orphans, missing summaries, uncited pages; with the LLM also duplicates, contradictions and suggested pages. Writes `wiki/lint-report.md`. |
 | `reindex` | Rebuilds `index.md` and refreshes embeddings after you edit pages by hand. |
 | `init` | Creates the vault folders. |
 
+## Source formats
+
+Drop files into `vault/raw/` (or anywhere) as they are; no conversion needed. Text is extracted in
+memory at ingest time, and files in `raw/` are never modified.
+
+| Format | Needs | Notes |
+|---|---|---|
+| `.md` `.markdown` `.txt` `.rst` | nothing | Best results |
+| `.pdf` | `pdf` or `convert` | Needs a text layer: scanned PDFs must be OCR'd first |
+| `.html` `.htm` | nothing (`convert` is cleaner) | Obsidian Web Clipper gives the cleanest web articles |
+| `.docx` `.pptx` `.xlsx` `.xls` `.epub` `.msg` `.csv` `.json` `.xml` `.ipynb` | `convert` | Converted to markdown with MarkItDown, tables included |
+
+Folder ingest skips unsupported files and lists them. A file that can't be read (wrong type, corrupt,
+no text) is reported and left out of `raw/`; the rest of the batch continues and the command exits 1.
+
 ## Switching to Claude
 
 ```bash
-uv sync --extra pdf --extra claude
+uv sync --extra convert --extra claude
 ```
 
 Then set `ANTHROPIC_API_KEY` (or run `ant auth login`) and either change `provider = "anthropic"`
@@ -73,7 +92,7 @@ You can also point Claude Code (or Codex) at this folder and let it edit the vau
 ```
 AGENTS.md          schema: conventions the LLM follows (also the system prompt)
 wiki.toml          provider, models, limits
-src/llmwiki/       providers.py, vault.py, search.py, ops.py, cli.py
+src/llmwiki/       providers.py, sources.py, vault.py, search.py, ops.py, cli.py
 vault/raw/         immutable sources
 vault/wiki/        sources/ entities/ concepts/ analyses/ index.md log.md
 .cache/            embedding cache (safe to delete)

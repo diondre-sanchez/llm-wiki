@@ -9,6 +9,9 @@ dependencies = []
 [project.optional-dependencies]
 pdf = ["pypdf>=5"]
 claude = ["anthropic>=0.70"]
+convert = [
+    "markitdown[docx,outlook,pdf,pptx,xls,xlsx]>=0.1.8",
+]
 
 [project.scripts]
 wiki = "llmwiki.cli:main"

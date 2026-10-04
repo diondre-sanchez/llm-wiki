@@ -8,20 +8,23 @@ from pathlib import Path
 from .config import load_config
 from .providers import Embedder, get_llm
 from .search import SearchIndex
+from .sources import UnsupportedSource, is_supported
 from .vault import Vault
-
-SOURCE_EXTS = {".md", ".txt", ".pdf", ".html", ".htm", ".markdown", ".rst"}
 
 
 def _expand(paths: list[str]) -> list[Path]:
-    out = []
+    out, skipped = [], []
     for p in map(Path, paths):
         if p.is_dir():
-            out += sorted(f for f in p.rglob("*") if f.suffix.lower() in SOURCE_EXTS)
+            for f in sorted(x for x in p.rglob("*") if x.is_file() and not x.name.startswith(".")):
+                (out if is_supported(f) else skipped).append(f)
         elif p.exists():
-            out.append(p)
+            out.append(p)  # named explicitly: let read_source explain if it can't be read
         else:
             print(f"skip (not found): {p}", file=sys.stderr)
+    if skipped:
+        names = ", ".join(f.name for f in skipped[:5]) + (" ..." if len(skipped) > 5 else "")
+        print(f"skip ({len(skipped)} unsupported): {names}", file=sys.stderr)
     return out
 
 
@@ -96,11 +99,20 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.cmd == "ingest":
         files = _expand(args.paths)
+        failed = []
         for i, f in enumerate(files, 1):
             print(f"[{i}/{len(files)}] ingesting {f.name} with {wiki.llm.name}")
             t = time.time()
-            touched = wiki.ingest(f)
+            try:
+                touched = wiki.ingest(f)
+            except UnsupportedSource as e:
+                print(f"  skipped: {e}", file=sys.stderr)
+                failed.append(f.name)
+                continue
             print(f"  done in {time.time() - t:.0f}s - {len(touched)} pages: {', '.join(touched)}")
+        if failed:
+            print(f"{len(failed)} of {len(files)} file(s) not ingested: {', '.join(failed)}", file=sys.stderr)
+            sys.exit(1)
     elif args.cmd == "query":
         print(wiki.query(args.question, k=args.k, save=args.save))
     elif args.cmd == "lint":
