@@ -2,7 +2,7 @@
 __pycache__/
 *.pyc
 .cache/
-vault/.obsidian/workspace*.json
 
-# Source documents stay on this machine (may be copyrighted); generated wiki pages are committed.
-vault/raw/
+# Personal data stays on this machine: source documents and the wiki pages generated from them.
+# Back it up with scripts/backup-vault.ps1 instead.
+vault/

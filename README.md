@@ -8,6 +8,7 @@ instead of over raw chunks.
 - **Engine:** local Ollama by default; switch to Claude by changing one setting.
 - **Search:** BM25 + local embeddings (`nomic-embed-text`), fused with reciprocal rank fusion. Always local.
 - **Storage:** plain markdown with YAML frontmatter and `[[wikilinks]]`. Open `vault/` in Obsidian.
+- **Private by default:** `vault/` (your documents and the pages generated from them) is gitignored, so it never reaches GitHub.
 - **Core dependencies:** none (Python stdlib). Document conversion, PDF and Claude support are optional extras.
 
 ## Setup
@@ -76,6 +77,23 @@ no text) is reported and left out of `raw/`; the rest of the batch continues and
 model you chat with can search and cite your wiki. Setup steps, security notes and a Windows
 start-at-logon script: [docs/open-webui.md](docs/open-webui.md).
 
+## Privacy and backups
+
+Everything you ingest stays on this machine. `vault/` is gitignored: both `raw/` (your documents)
+and `wiki/` (generated pages, which summarize and quote those documents). The repository holds only
+the code, docs and config. A fresh clone starts with an empty wiki, created by `uv run wiki init`.
+
+Because the vault isn't on GitHub, back it up yourself, for example to an external drive:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\backup-vault.ps1 -Destination E:\llm-wiki-backup
+```
+
+By default the backup only adds and updates files, so deleting something from the vault never deletes
+it from the backup. Add `-Mirror` to make the backup an exact copy instead. Set the `LLMWIKI_BACKUP`
+environment variable to skip `-Destination`. The script stops with a clear message if the drive isn't
+plugged in.
+
 ## Switching to Claude
 
 ```bash
@@ -101,10 +119,10 @@ You can also point Claude Code (or Codex) at this folder and let it edit the vau
 AGENTS.md          schema: conventions the LLM follows (also the system prompt)
 wiki.toml          provider, models, limits
 src/llmwiki/       providers.py, sources.py, vault.py, search.py, ops.py, mcp_server.py, cli.py
-scripts/           start-mcp.ps1, install-startup-task.ps1
+scripts/           start-mcp.ps1, install-startup-task.ps1, backup-vault.ps1
 docs/              open-webui.md
-vault/raw/         immutable sources
-vault/wiki/        sources/ entities/ concepts/ analyses/ index.md log.md
+vault/raw/         immutable sources            (gitignored)
+vault/wiki/        sources/ entities/ concepts/ analyses/ index.md log.md   (gitignored)
 .cache/            embedding cache (safe to delete)
 ```
 
