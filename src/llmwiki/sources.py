@@ -69,6 +69,37 @@ def read_source(path: Path) -> str:
     return text.strip()
 
 
+def source_metadata(path: Path) -> dict[str, str]:
+    """Title and author embedded in the file itself, when present. Title pages are often images,
+    so this is more reliable than asking the model to infer a title from the text."""
+    suffix = path.suffix.lower()
+    meta: dict[str, str] = {}
+    try:
+        if suffix == ".pdf":
+            from pypdf import PdfReader
+
+            info = PdfReader(str(path)).metadata or {}
+            meta = {"title": info.get("/Title") or "", "author": info.get("/Author") or ""}
+        elif suffix in {".docx", ".pptx", ".xlsx"}:
+            import zipfile
+
+            core = zipfile.ZipFile(path).read("docProps/core.xml").decode("utf-8", errors="replace")
+            for key, tag in (("title", "dc:title"), ("author", "dc:creator")):
+                m = re.search(rf"<{tag}>(.*?)</{tag}>", core, re.S)
+                meta[key] = m.group(1) if m else ""
+    except Exception:  # missing library, no metadata, unreadable properties: fall back to the model
+        return {}
+    meta = {k: str(v).strip() for k, v in meta.items() if v and str(v).strip()}
+    # Ignore placeholder titles that authoring tools leave behind.
+    if re.fullmatch(r"(?i)(untitled.*|microsoft word.*|document\d*|presentation\d*|.*\.(docx?|pdf|indd))",
+                    meta.get("title", "")):
+        meta.pop("title")
+    if re.fullmatch(r"(?i)(python-docx|python-pptx|openpyxl|microsoft office user|user|admin|author|owner)",
+                    meta.get("author", "")):
+        meta.pop("author")
+    return meta
+
+
 def _starts_with(path: Path, signature: bytes) -> bool:
     with path.open("rb") as fh:
         head = fh.read(1024)

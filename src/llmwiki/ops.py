@@ -1,5 +1,6 @@
 """The three LLM-Wiki operations: ingest, query, lint."""
 
+import hashlib
 import json
 import re
 import shutil
@@ -8,7 +9,7 @@ from pathlib import Path
 from .config import Config
 from .providers import LLM
 from .search import SearchIndex
-from .sources import read_source
+from .sources import read_source, source_metadata
 from .vault import Page, Vault, clean_title
 
 def plan_schema(existing_titles: list[str]) -> dict:
@@ -97,6 +98,17 @@ def _json(text: str) -> dict:
     return json.loads(text)
 
 
+def complete_json(llm: LLM, system: str, prompt: str, schema: dict, attempts: int = 2) -> dict:
+    """Ask for schema-constrained JSON, retrying when a response comes back malformed."""
+    for attempt in range(1, attempts + 1):
+        text = llm.complete(system, prompt, schema)
+        try:
+            return _json(text)
+        except json.JSONDecodeError as e:
+            if attempt == attempts:
+                raise RuntimeError(f"{llm.name} returned invalid JSON {attempts} times ({e}).") from e
+
+
 class Wiki:
     def __init__(self, cfg: Config, llm: LLM, echo=print):
         self.cfg = cfg
@@ -112,6 +124,7 @@ class Wiki:
     def ingest(self, src: Path) -> list[str]:
         src = src.resolve()
         text = read_source(src)  # before copying, so unreadable files never land in raw/
+        meta = source_metadata(src)
         raw = self.vault.raw.resolve()
         if raw not in src.parents:
             dest = raw / src.name
@@ -122,6 +135,13 @@ class Wiki:
         source_id = src.relative_to(raw).as_posix()
 
         material = self._condense(text)
+        if material is not text:
+            # Condensing tends to drop the title page; keep the opening so title and author survive.
+            material = (f"OPENING OF THE ORIGINAL (title page, author, front matter):\n{text[:1500]}\n\n"
+                        f"CONDENSED NOTES:\n{material}")
+        if meta:
+            header = "\n".join(f"{k.title()}: {v}" for k, v in meta.items())
+            material = f"DOCUMENT METADATA (embedded in the file):\n{header}\n\n{material}"
 
         self.index.refresh()
         related = self.index.search(material[:3000], k=self.cfg.get("ingest", "related_pages", 8))
@@ -131,7 +151,8 @@ class Wiki:
         max_pages = self.cfg.get("ingest", "max_pages_per_ingest", 12)
         # Analyses are snapshots of past answers, and sources belong to one raw file; neither is merged into.
         related_titles = [p.title for p, _ in related if p.type in {"entity", "concept"}]
-        plan = _json(self.llm.complete(self.system, f"""TASK: plan an ingest.
+        own_page = f' titled "{meta["title"]}"' if meta.get("title") else ""
+        plan = complete_json(self.llm, self.system, f"""TASK: plan an ingest.
 
 Read the SOURCE and decide which wiki pages it should change. Knowledge must compound, so:
 - updates: EXISTING PAGES that this source adds new facts, examples, or counterpoints to.
@@ -139,14 +160,18 @@ Read the SOURCE and decide which wiki pages it should change. Knowledge must com
 - new_pages: important entities (people, orgs, products, places, works) and concepts (ideas, methods, terms)
   that have no page yet. Only subjects a reader would look up on their own; skip tools, files,
   and names mentioned only in passing. Never duplicate an existing page under a new name.
+- The source itself gets its own summary page{own_page}. Never add another page for the same work
+  (for example under a subtitle, dedication, series name or chapter title).
+- For books, essays and papers, cover the work's main ideas as concept pages, not just its people.
 - At most {max_pages} pages in total across both lists.
-- source_title: a short descriptive title for the source itself.
+- source_title: the source's actual title if it has one (book, article, paper), else a short descriptive title.
+  The file is named "{src.name}", which is often a good hint.
 
 EXISTING PAGES:
 {related_txt}
 
 SOURCE ({source_id}):
-{material}""", plan_schema(related_titles)))
+{material}""", plan_schema(related_titles))
 
         updates = list({u["title"].lower(): u for u in plan["updates"]
                         if u["title"] in related_titles}.values())
@@ -156,9 +181,15 @@ SOURCE ({source_id}):
             if item["title"] and not self.vault.find(item["title"]):
                 new_pages.append(item)
         planned = [{"title": u["title"], "type": self.vault.find(u["title"]).type, "why": u["why"]} for u in updates]
+        # Prefer the title embedded in the file; title pages are often images the text never mentions.
+        source_title = (clean_title(meta.get("title", "")) or clean_title(plan["source_title"])
+                        or clean_title(src.stem))
+        if meta.get("title"):
+            # The file names the work itself, and the work is the source page: a planned page with
+            # the same title would be a duplicate of it, not a separate subject.
+            new_pages = [x for x in new_pages if x["title"].lower() != source_title.lower()]
         planned = (planned + new_pages)[:max_pages]
 
-        source_title = clean_title(plan["source_title"]) or clean_title(src.stem)
         # A source often shares its name with its main subject; keep the two pages distinct.
         clash = self.vault.find(source_title)
         if any(x["title"].lower() == source_title.lower() for x in planned) or (clash and clash.type != "source"):
@@ -189,27 +220,48 @@ SOURCE ({source_id}):
         return touched
 
     def _condense(self, text: str) -> str:
-        """Fit long sources into the context window by condensing chunk by chunk."""
+        """Fit long sources into the context window: condense chunk by chunk, repeating until it fits.
+
+        Results are cached per source text and engine, so a failed ingest can be retried without redoing this.
+        """
         limit = self.cfg.get("ingest", "max_source_chars", 24000)
         if len(text) <= limit:
             return text
+        cache = self.cfg.cache_dir / "condensed" / (
+            hashlib.sha1(f"{self.llm.name}|{limit}|{text}".encode("utf-8")).hexdigest() + ".md")
+        if cache.exists():
+            self.echo("  using condensed notes cached from an earlier run")
+            return cache.read_text(encoding="utf-8")
+
         size = self.cfg.get("ingest", "chunk_chars", 12000)
-        chunks = [text[i : i + size] for i in range(0, len(text), size)]
-        notes = []
-        for n, chunk in enumerate(chunks, 1):
-            self.echo(f"  condensing chunk {n}/{len(chunks)}...")
-            notes.append(self.llm.complete(self.system, f"""TASK: condense part {n} of {len(chunks)} of a long source into dense notes.
-Keep every named entity, number, date, definition, claim and notable short quote. Drop filler. Output markdown bullets only.
+        material = text
+        for rnd in range(1, 4):
+            chunks = [material[i : i + size] for i in range(0, len(material), size)]
+            budget = max(800, limit // len(chunks))  # chars per chunk so the joined notes fit the limit
+            label = "condensing" if rnd == 1 else f"condensing again (round {rnd}, notes still too long)"
+            notes = []
+            for n, chunk in enumerate(chunks, 1):
+                self.echo(f"  {label}: chunk {n}/{len(chunks)}...")
+                notes.append(self.llm.complete(self.system, f"""TASK: condense part {n} of {len(chunks)} of a long source into dense notes.
+Keep the named entities, numbers, dates, definitions, key claims and a few notable short quotes. Drop filler and repetition.
+Output markdown bullets only, at most {budget} characters in total.
 
 TEXT:
 {chunk}"""))
-        return "\n\n".join(notes)
+            material = "\n\n".join(notes)
+            if len(material) <= limit:
+                break
+        if len(material) > limit:
+            self.echo(f"  warning: notes are still {len(material)} chars (limit {limit}); the next step may overflow")
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(material, encoding="utf-8")
+        return material
 
     def _write(self, title: str, page_type: str, material: str, source_id: str, source_title: str,
                known: list[str], instruction: str, existing: Page | None = None) -> Page:
         existing = existing or self.vault.find(title)
         existing_txt = existing.body if existing else "(new page)"
-        result = _json(self.llm.complete(self.system, f"""TASK: write one wiki page.
+        result = complete_json(self.llm, self.system, f"""TASK: write one wiki page.
 
 {instruction}
 
@@ -228,7 +280,7 @@ EXISTING PAGE:
 {existing_txt}
 
 SOURCE ({source_id}):
-{material}""", PAGE_SCHEMA))
+{material}""", PAGE_SCHEMA)
         return self.vault.save(title, page_type, result["body"], result["summary"].strip(),
                                sources=[source_id], tags=result.get("tags", []))
 
@@ -296,7 +348,7 @@ QUESTION: {question}""")
             found = False
             for a, b, sim in pairs:
                 self.echo(f"  comparing [[{a.title}]] vs [[{b.title}]] ({sim:.2f})")
-                r = _json(self.llm.complete(self.system, f"""TASK: compare two wiki pages.
+                r = complete_json(self.llm, self.system, f"""TASK: compare two wiki pages.
 duplicate: true if they describe the same subject and should be merged.
 contradictions: factual claims that conflict between the pages (empty if none). Quote each claim briefly.
 
@@ -304,7 +356,7 @@ PAGE A:
 {a.text()[:6000]}
 
 PAGE B:
-{b.text()[:6000]}""", CONTRADICTION_SCHEMA))
+{b.text()[:6000]}""", CONTRADICTION_SCHEMA)
                 if r["duplicate"]:
                     found = True
                     out.append(f"- Possible duplicate: [[{a.title}]] and [[{b.title}]]")
@@ -317,13 +369,13 @@ PAGE B:
             out.append("")
 
             self.echo("  looking for gaps...")
-            g = _json(self.llm.complete(self.system, f"""TASK: find gaps in the wiki.
+            g = complete_json(self.llm, self.system, f"""TASK: find gaps in the wiki.
 missing_pages: at most 8 important entities or concepts that the pages mention but that have NO page in the INDEX yet.
 Each must be a real subject (a proper noun or an established term), not a phrase from a summary.
 open_questions: at most 5 questions worth investigating with new sources.
 
 INDEX:
-{self.vault.index_text()[:8000]}""", GAPS_SCHEMA))
+{self.vault.index_text()[:8000]}""", GAPS_SCHEMA)
             missing = [t for t in dict.fromkeys(g["missing_pages"]) if t.strip().lower() not in titles][:8]
             out += ["## Suggested new pages", ""] + ([f"- {t}" for t in missing] or ["- none"]) + [""]
             out += ["## Open questions", ""] + ([f"- {q}" for q in g["open_questions"][:5]] or ["- none"]) + [""]

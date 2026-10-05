@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 .cache/
 vault/.obsidian/workspace*.json
+
+# Source documents stay on this machine (may be copyrighted); generated wiki pages are committed.
+vault/raw/

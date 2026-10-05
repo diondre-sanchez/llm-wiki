@@ -34,3 +34,27 @@ broken links: 2, orphans: 1 - see [[lint-report]]
 ## [2026-10-03 17:09] lint | 14 pages
 
 broken links: 2, orphans: 1 - see [[lint-report]]
+
+## [2026-10-04 19:44] ingest | A Gentle Reminder
+
+source: raw/A Gentle Reminder.pdf | engine: ollama:qwen3.8:27b
+- [[A Gentle Reminder]]
+- [[Bianca Sparacino]]
+- [[Thought Catalog Books]]
+- [[Deep Feelers]]
+- [[Self-Closure]]
+- [[Real vs. Perfect Love]]
+- [[Vulnerability as Courage]]
+- [[Solitude as Foundation]]
+- [[Energy Transformation in Grief]]
+- [[The Giver's Burden]]
+- [[Love as Complementation]]
+- [[Non-Linear Healing]]
+
+## [2026-10-04 19:44] lint | 26 pages
+
+broken links: 1, orphans: 1 - see [[lint-report]]
+
+## [2026-10-04 19:44] edit | A Gentle Reminder
+
+Corrected: "For the Deep Feelers" is the dedication, not an alternate title.

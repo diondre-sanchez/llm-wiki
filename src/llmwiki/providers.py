@@ -13,6 +13,10 @@ from typing import Protocol
 from .config import Config
 
 
+class ContextOverflow(RuntimeError):
+    """The prompt plus the response did not fit the model's context window."""
+
+
 class LLM(Protocol):
     name: str
 
@@ -59,6 +63,11 @@ class OllamaLLM:
         if schema:
             body["format"] = schema
         data = _post_json(f"{self.host}/api/chat", body, self.timeout)
+        used = data.get("prompt_eval_count", 0) + data.get("eval_count", 0)
+        if data.get("done_reason") == "length" or used >= self.num_ctx:
+            raise ContextOverflow(
+                f"{self.model} ran out of context ({used} of {self.num_ctx} tokens) and its output was cut off. "
+                "Lower [ingest].max_source_chars or raise [ollama].num_ctx in wiki.toml.")
         return data["message"]["content"].strip()
 
 

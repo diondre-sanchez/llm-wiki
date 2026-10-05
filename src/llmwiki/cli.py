@@ -119,6 +119,10 @@ def main(argv: list[str] | None = None) -> None:
                 print(f"  skipped: {e}", file=sys.stderr)
                 failed.append(f.name)
                 continue
+            except RuntimeError as e:  # model errors: context overflow, invalid JSON, Ollama unreachable
+                print(f"  failed: {e}\n  Condensed notes are cached, so re-running resumes quickly.", file=sys.stderr)
+                failed.append(f.name)
+                continue
             print(f"  done in {time.time() - t:.0f}s - {len(touched)} pages: {', '.join(touched)}")
         if failed:
             print(f"{len(failed)} of {len(files)} file(s) not ingested: {', '.join(failed)}", file=sys.stderr)
