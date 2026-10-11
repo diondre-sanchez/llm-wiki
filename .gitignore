@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 .cache/
+~$*
 
 # Personal data stays on this machine: source documents and the wiki pages generated from them.
 # Back it up with scripts/backup-vault.ps1 instead.

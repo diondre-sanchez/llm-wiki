@@ -98,6 +98,40 @@ def _json(text: str) -> dict:
     return json.loads(text)
 
 
+def _split_lines(text: str, size: int) -> list[str]:
+    """Split text into chunks of about `size` chars, breaking at line ends where possible."""
+    chunks, cur = [], ""
+    for line in text.splitlines(keepends=True):
+        while len(line) > size:  # a single huge line (some PDFs have no line breaks)
+            if cur:
+                chunks.append(cur)
+                cur = ""
+            chunks.append(line[:size])
+            line = line[size:]
+        if len(cur) + len(line) > size and cur:
+            chunks.append(cur)
+            cur = ""
+        cur += line
+    if cur.strip():
+        chunks.append(cur)
+    return chunks
+
+
+def _fit_lines(text: str, budget: int) -> str:
+    """Keep whole lines from the top until the budget is reached (the model puts important points first)."""
+    kept, used = [], 0
+    for line in text.strip().splitlines():
+        if not line.strip():
+            continue
+        if used + len(line) + 1 > budget:
+            if not kept:
+                kept.append(line[:budget])
+            break
+        kept.append(line)
+        used += len(line) + 1
+    return "\n".join(kept)
+
+
 def complete_json(llm: LLM, system: str, prompt: str, schema: dict, attempts: int = 2) -> dict:
     """Ask for schema-constrained JSON, retrying when a response comes back malformed."""
     for attempt in range(1, attempts + 1):
@@ -184,10 +218,9 @@ SOURCE ({source_id}):
         # Prefer the title embedded in the file; title pages are often images the text never mentions.
         source_title = (clean_title(meta.get("title", "")) or clean_title(plan["source_title"])
                         or clean_title(src.stem))
-        if meta.get("title"):
-            # The file names the work itself, and the work is the source page: a planned page with
-            # the same title would be a duplicate of it, not a separate subject.
-            new_pages = [x for x in new_pages if x["title"].lower() != source_title.lower()]
+        # The source page covers the work itself, so a new page planned under the same title would
+        # duplicate it. (An existing page with that title is a different subject; see the clash check.)
+        new_pages = [x for x in new_pages if x["title"].lower() != source_title.lower()]
         planned = (planned + new_pages)[:max_pages]
 
         # A source often shares its name with its main subject; keep the two pages distinct.
@@ -220,41 +253,50 @@ SOURCE ({source_id}):
         return touched
 
     def _condense(self, text: str) -> str:
-        """Fit long sources into the context window: condense chunk by chunk, repeating until it fits.
+        """Fit long sources into the context window by condensing chunk by chunk, round after round.
 
-        Results are cached per source text and engine, so a failed ingest can be retried without redoing this.
+        Models don't reliably respect length instructions, so the budget is enforced here: each chunk's
+        notes are trimmed at a line break, which shrinks every round at least 4x and guarantees an end.
+        Progress is cached after every round, so a failed ingest resumes instead of starting over.
         """
         limit = self.cfg.get("ingest", "max_source_chars", 24000)
         if len(text) <= limit:
             return text
         cache = self.cfg.cache_dir / "condensed" / (
             hashlib.sha1(f"{self.llm.name}|{limit}|{text}".encode("utf-8")).hexdigest() + ".md")
+        material = text
         if cache.exists():
-            self.echo("  using condensed notes cached from an earlier run")
-            return cache.read_text(encoding="utf-8")
+            material = cache.read_text(encoding="utf-8")
+            if len(material) <= limit:
+                self.echo("  using condensed notes cached from an earlier run")
+                return material
+            self.echo(f"  resuming from cached notes ({len(material)} chars)")
 
         size = self.cfg.get("ingest", "chunk_chars", 12000)
-        material = text
-        for rnd in range(1, 4):
-            chunks = [material[i : i + size] for i in range(0, len(material), size)]
-            budget = max(800, limit // len(chunks))  # chars per chunk so the joined notes fit the limit
-            label = "condensing" if rnd == 1 else f"condensing again (round {rnd}, notes still too long)"
+        target = int(limit * 0.9)  # headroom for the joins between chunks
+        rnd = 0
+        while len(material) > limit:
+            rnd += 1
+            chunks = _split_lines(material, size)
+            # Shrink about 4x per round rather than all at once: later rounds then choose what to keep
+            # with more of the source in view. A round that can fit the limit only shrinks as far as needed.
+            budget = max(300, target // len(chunks), max(len(c) for c in chunks) // 4)
+            bullets = max(3, budget // 160)
+            label = "condensing" if rnd == 1 else f"condensing again (round {rnd})"
             notes = []
             for n, chunk in enumerate(chunks, 1):
                 self.echo(f"  {label}: chunk {n}/{len(chunks)}...")
-                notes.append(self.llm.complete(self.system, f"""TASK: condense part {n} of {len(chunks)} of a long source into dense notes.
-Keep the named entities, numbers, dates, definitions, key claims and a few notable short quotes. Drop filler and repetition.
-Output markdown bullets only, at most {budget} characters in total.
+                out = self.llm.complete(self.system, f"""TASK: condense part {n} of {len(chunks)} of a long source into notes.
+Write at most {bullets} bullets, one line each, most important first.
+Keep named people, places, works, numbers, definitions and key claims; a few short quotes are fine. Skip filler.
+Output only the bullets.
 
 TEXT:
-{chunk}"""))
-            material = "\n\n".join(notes)
-            if len(material) <= limit:
-                break
-        if len(material) > limit:
-            self.echo(f"  warning: notes are still {len(material)} chars (limit {limit}); the next step may overflow")
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.write_text(material, encoding="utf-8")
+{chunk}""")
+                notes.append(_fit_lines(out, budget))
+            material = "\n".join(notes)
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_text(material, encoding="utf-8")
         return material
 
     def _write(self, title: str, page_type: str, material: str, source_id: str, source_title: str,
